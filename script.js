@@ -649,3 +649,39 @@ $("miniHideBtn").addEventListener("click", () => {
     $("reopenBtn").hidden = false;
   }
 });
+
+/* ---------- extra cuteness: floating background + confetti + ripple ---------- */
+const bg = $("bg");
+if (bg) {
+  ["💗", "✨", "☕", "🌸", "⭐", "🫧", "🍓", "💕"].forEach((e, i) => {
+    for (let k = 0; k < 2; k++) {
+      const s = document.createElement("span");
+      s.textContent = e;
+      s.style.cssText = `left:${(i * 12.5 + k * 6 + Math.random() * 5) % 100}%;font-size:${14 + Math.random() * 20}px;animation-duration:${14 + Math.random() * 14}s;animation-delay:${-Math.random() * 20}s`;
+      bg.appendChild(s);
+    }
+  });
+}
+function burst(n = 26) {
+  const ems = ["💗", "✨", "☕", "🌸", "⭐", "🎉", "💖"];
+  for (let i = 0; i < n; i++) {
+    const s = document.createElement("span");
+    s.className = "confetti";
+    s.textContent = ems[i % ems.length];
+    const a = Math.random() * Math.PI * 2,
+      d = 90 + Math.random() * 190;
+    s.style.cssText = `--x:${Math.cos(a) * d}px;--y:${Math.sin(a) * d - 60}px;--r:${Math.random() * 720 - 360}deg`;
+    document.body.appendChild(s);
+    setTimeout(() => s.remove(), 1400);
+  }
+}
+document.addEventListener("pointerdown", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  const r = b.getBoundingClientRect(),
+    w = document.createElement("i");
+  w.className = "ripple";
+  w.style.cssText = `left:${e.clientX - r.left}px;top:${e.clientY - r.top}px`;
+  b.appendChild(w);
+  setTimeout(() => w.remove(), 600);
+});
