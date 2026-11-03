@@ -104,7 +104,9 @@ const cleanCode = (v) =>
 const R = (path) => ref(db, `rooms/${roomCode}/${path}`);
 const showError = (e) => {
   console.error(e);
-  $("setupError").textContent = e.message || String(e);
+  const m = e.message || String(e);
+  $("setupError").textContent = m;
+  toast(m);
 };
 
 function toast(msg) {
@@ -146,9 +148,25 @@ function notify(msg) {
       n.close();
     };
   }
-  const w = $("miniWidget");
-  w.classList.add("alert");
-  setTimeout(() => w.classList.remove("alert"), 4000);
+   const w = $("miniWidget");
+  if (w) {
+    w.classList.add("alert");
+    setTimeout(() => w.classList.remove("alert"), 4000);
+  }
+}
+
+function burst(n = 26) {
+  const ems = ["💗", "✨", "☕", "🌸", "⭐", "🎉", "💖"];
+  for (let i = 0; i < n; i++) {
+    const s = document.createElement("span");
+    s.className = "confetti";
+    s.textContent = ems[i % ems.length];
+    const a = Math.random() * Math.PI * 2,
+      d = 90 + Math.random() * 190;
+    s.style.cssText = `--x:${Math.cos(a) * d}px;--y:${Math.sin(a) * d - 60}px;--r:${Math.random() * 720 - 360}deg`;
+        (pip?.document || document).body.appendChild(s);
+    setTimeout(() => s.remove(), 1400);
+  }
 }
 
 /* ---------- room enter / create ---------- */
@@ -223,12 +241,12 @@ function startListening() {
   stops.push(
     onValue(
       R("requests"),
-      (s) => {
-        requests = s.val() || {};
-        detectNew();
-        renderRequests();
-        primed = true;
-      },
+     (s) => {
+  requests = s.val() || {};
+  renderRequests();                                  // draw first
+  try { detectNew(); } catch (err) { console.error(err); }  // then notify
+  primed = true;
+},,
       showError,
     ),
   );
@@ -447,7 +465,11 @@ function detectNew() {
       if (seen.has(rk)) continue;
       seen.add(rk);
       if (!primed || r.from !== userId || u === userId) continue;
-      if (x.status === "yes" || x.status === "ready") burst();
+           if (x.status === "yes" || x.status === "ready") {
+        try {
+          burst();
+        } catch {}
+      }
       notify(
         x.status === "yes"
           ? `${x.name} agreed to your break ☕`
@@ -584,7 +606,7 @@ $("notifBtn").addEventListener("click", async () => {
       : "Notifications blocked 🥺",
   );
 });
-$("miniReason").innerHTML = REASONS.map(
+if ($("miniReason")) $("miniReason").innerHTML = REASONS.map(
   ([e, l]) => `<option value="${esc(l)} ${e}">${e} ${esc(l)}</option>`,
 ).join("");
 
@@ -662,19 +684,7 @@ if (bg) {
     }
   });
 }
-function burst(n = 26) {
-  const ems = ["💗", "✨", "☕", "🌸", "⭐", "🎉", "💖"];
-  for (let i = 0; i < n; i++) {
-    const s = document.createElement("span");
-    s.className = "confetti";
-    s.textContent = ems[i % ems.length];
-    const a = Math.random() * Math.PI * 2,
-      d = 90 + Math.random() * 190;
-    s.style.cssText = `--x:${Math.cos(a) * d}px;--y:${Math.sin(a) * d - 60}px;--r:${Math.random() * 720 - 360}deg`;
-    document.body.appendChild(s);
-    setTimeout(() => s.remove(), 1400);
-  }
-}
+
 document.addEventListener("pointerdown", (e) => {
   const b = e.target.closest("button");
   if (!b) return;
