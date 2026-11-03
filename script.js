@@ -246,7 +246,7 @@ function startListening() {
   renderRequests();                                  // draw first
   try { detectNew(); } catch (err) { console.error(err); }  // then notify
   primed = true;
-},,
+},
       showError,
     ),
   );
