@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,35 +8,68 @@
   <link rel="icon" href="data:," />
   <link rel="stylesheet" href="style.css" />
 </head>
+
 <body>
   <div class="bg" id="bg" aria-hidden="true"></div>
   <main class="app" id="app">
     <header class="topbar">
-      <div class="brand"><span class="brand-icon">☕</span><div><h1>Break Together</h1><p>tiny pauses, better days ✨</p></div></div>
+      <div class="brand"><span class="brand-icon">☕</span>
+        <div>
+          <h1>Break Together</h1>
+          <p>tiny pauses, better days ✨</p>
+        </div>
+      </div>
       <div class="top-actions">
-        <button class="icon-btn" id="notifBtn" title="Turn on browser notifications">🔔</button>
+        <button class="icon-btn" id="notifBtn" title="Notification settings"
+          aria-label="Notification settings">🔔</button>
         <button class="icon-btn" id="compactBtn" title="Float on top of my work">↘</button>
         <button class="icon-btn" id="hideBtn" title="Hide panel">×</button>
       </div>
     </header>
 
     <section class="setup panel" id="setup">
-      <svg class="mascot" viewBox="0 0 120 120" aria-hidden="true"><g class="steam" fill="none" stroke="#f7a8cc" stroke-width="4" stroke-linecap="round"><path d="M45 28c-6-6 6-10 0-18"/><path d="M62 28c-6-6 6-10 0-18"/><path d="M79 28c-6-6 6-10 0-18"/></g><path d="M92 52h8a12 12 0 010 24h-10" fill="none" stroke="#e9a3c8" stroke-width="6"/><path d="M24 40h70v26a30 30 0 01-30 30h-10a30 30 0 01-30-30z" fill="#fff" stroke="#f08fbc" stroke-width="4"/><circle cx="46" cy="62" r="4" fill="#56364a"/><circle cx="74" cy="62" r="4" fill="#56364a"/><ellipse cx="38" cy="72" rx="6" ry="4" fill="#ffb3d1"/><ellipse cx="82" cy="72" rx="6" ry="4" fill="#ffb3d1"/><path d="M54 72q6 7 12 0" fill="none" stroke="#56364a" stroke-width="3" stroke-linecap="round"/><ellipse cx="60" cy="108" rx="34" ry="6" fill="#f5d6e5"/></svg>
+      <svg class="mascot" viewBox="0 0 120 120" aria-hidden="true">
+        <g class="steam" fill="none" stroke="#f7a8cc" stroke-width="4" stroke-linecap="round">
+          <path d="M45 28c-6-6 6-10 0-18" />
+          <path d="M62 28c-6-6 6-10 0-18" />
+          <path d="M79 28c-6-6 6-10 0-18" />
+        </g>
+        <path d="M92 52h8a12 12 0 010 24h-10" fill="none" stroke="#e9a3c8" stroke-width="6" />
+        <path d="M24 40h70v26a30 30 0 01-30 30h-10a30 30 0 01-30-30z" fill="#fff" stroke="#f08fbc" stroke-width="4" />
+        <circle cx="46" cy="62" r="4" fill="#56364a" />
+        <circle cx="74" cy="62" r="4" fill="#56364a" />
+        <ellipse cx="38" cy="72" rx="6" ry="4" fill="#ffb3d1" />
+        <ellipse cx="82" cy="72" rx="6" ry="4" fill="#ffb3d1" />
+        <path d="M54 72q6 7 12 0" fill="none" stroke="#56364a" stroke-width="3" stroke-linecap="round" />
+        <ellipse cx="60" cy="108" rx="34" ry="6" fill="#f5d6e5" />
+      </svg>
       <h2>Join your little break club 🍟</h2>
       <label>Your name<input id="nameInput" maxlength="24" placeholder="e.g. Nini" /></label>
-      <label>Room code<input id="roomInput" maxlength="12" placeholder="e.g. 3N (leave empty to get a new one)" /></label>
-      <div class="button-row"><button class="primary" id="createBtn">Create a room</button><button class="secondary" id="joinBtn">Join room</button></div>
+      <label>Room code<input id="roomInput" maxlength="12"
+          placeholder="e.g. 3N (leave empty to get a new one)" /></label>
+      <div class="button-row"><button class="primary" id="createBtn">Create a room</button><button class="secondary"
+          id="joinBtn">Join room</button></div>
       <p class="hint">Share the same room code with your office friends.</p>
       <p class="error" id="setupError" aria-live="polite"></p>
     </section>
 
     <section id="roomView" hidden>
       <div class="room-heading panel">
-        <div><span class="eyebrow">YOUR BREAK CLUB</span><h2 id="roomTitle">Room</h2><p id="roomSub"></p></div>
-        <div class="button-row"><button class="secondary small" id="copyBtn">Copy code</button><button class="secondary small" id="leaveBtn">Leave</button></div>
+        <div><span class="eyebrow">YOUR BREAK CLUB</span>
+          <h2 id="roomTitle">Room</h2>
+          <p id="roomSub"></p>
+        </div>
+        <div class="button-row"><button class="secondary small" id="copyBtn">Copy code</button><button
+            class="secondary small" id="leaveBtn">Leave</button></div>
       </div>
+      <details class="panel admin-panel" id="adminPanel" hidden>
+        <summary>👑 Admin controls</summary>
+        <div id="adminBody"></div>
+      </details>
       <section class="panel people-panel">
-        <div class="section-title"><h3>Who's around? <span>🫶</span></h3><span class="live-dot">LIVE</span></div>
+        <div class="section-title">
+          <h3>Who's around? <span>🫶</span></h3><span class="live-dot">LIVE</span>
+        </div>
         <div class="people" id="peopleList"></div>
       </section>
       <section class="panel request-panel">
@@ -48,30 +82,54 @@
         <p class="hint">Everyone in this room gets a live request.</p>
       </section>
       <section class="panel activity-panel">
-        <div class="section-title"><h3>Break requests <span>🔔</span></h3><span class="hint">newest first</span></div>
-        <div id="requestsList" class="requests-list"><p class="empty">No break requests yet. Be the first 🌸</p></div>
+        <div class="section-title">
+          <h3>Break requests <span>🔔</span></h3><span class="hint">newest first</span>
+        </div>
+        <div id="requestsList" class="requests-list">
+          <p class="empty">No break requests yet. Be the first 🌸</p>
+        </div>
       </section>
       <section class="panel chat-panel">
         <h3>Little chat 💬</h3>
         <div class="chat-log" id="chatLog"></div>
-        <div class="chat-row"><input id="chatInput" maxlength="120" placeholder="Say something sweet…" /><button class="primary small" id="chatSend">Send</button></div>
-        <div class="reacts" id="reacts"><button>💗</button><button>☕</button><button>😂</button><button>🫶</button><button>🥹</button></div>
+        <div class="chat-row"><input id="chatInput" maxlength="120" placeholder="Say something sweet…" /><button
+            class="primary small" id="chatSend">Send</button></div>
+        <div class="reacts" id="reacts">
+          <button>💗</button><button>☕</button><button>😂</button><button>🫶</button><button>🥹</button></div>
       </section>
     </section>
     <footer>Made for friendly little pauses 🤜🤛</footer>
   </main>
   <div class="toast" id="toast" role="status"></div>
-
+  <dialog class="notif-dialog" id="notifDialog">
+    <div class="nd-head">
+      <h3>Notifications 🔔</h3><button class="icon-btn" id="ndClose" aria-label="Close">×</button>
+    </div>
+    <div class="nd-status" id="ndStatus"></div>
+    <p class="nd-text" id="ndText"></p>
+    <ol class="nd-steps" id="ndSteps" hidden>
+      <li>Click the 🔒 (or ⚙) icon at the left of the address bar.</li>
+      <li>Find <b>Notifications</b> and set it to <b>Allow</b>.</li>
+      <li>Come back and press the button below (or reload the page).</li>
+      <li>On a phone: browser menu ⋮ → Settings → Site settings → Notifications. Also make sure Do&nbsp;Not&nbsp;Disturb
+        / Focus is off.</li>
+    </ol>
+    <div class="button-row" id="ndActions"></div>
+    <label class="toggle"><input type="checkbox" id="ndSound" /> 🔊 Sounds &amp; 5-second bell</label>
+    <label class="toggle"><input type="checkbox" id="ndAlerts" /> 💬 Pop-up alerts when I'm on another tab</label>
+  </dialog>
   <aside class="mini-widget" id="miniWidget" hidden>
     <div class="mini-top"><span>☕ Break buddy</span><button id="expandBtn" title="Expand">↗</button></div>
     <div class="mini-status" id="miniStatus">Ready for a tiny break?</div>
     <div class="mini-actions" id="miniActions"></div>
     <div class="mini-row"><select id="miniReason" class="mini-reason" title="Break reason"></select>
-    <button class="primary mini-break" id="miniRequestBtn">Break? 💗</button></div>
+      <button class="primary mini-break" id="miniRequestBtn">Break? 💗</button>
+    </div>
     <button class="secondary mini-hide" id="miniHideBtn">Close</button>
   </aside>
   <button class="reopen" id="reopenBtn" hidden>☕</button>
 
   <script type="module" src="script.js"></script>
 </body>
+
 </html>

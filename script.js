@@ -9,6 +9,7 @@ import {
   onValue,
   onDisconnect,
   serverTimestamp,
+  remove,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 // ⚠️ databaseURL is REQUIRED. Copy the exact URL shown at the top of
@@ -27,6 +28,7 @@ const firebaseConfig = {
 };
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
+
 
 const REASONS = [
   ["☕", "Tea / coffee"],
@@ -75,7 +77,18 @@ let people = {},
   toastTimer,
   primed = false;
 const seen = new Set(),
-  autoReady = new Set();
+  fired = new Set();
+let info = null, banned = {}, kept = false;
+
+/* ---------- server-synced clock (fixes "two devices see different time") ---------- */
+let serverOffset = 0;
+const now = () => Date.now() + serverOffset;
+onValue(ref(db, ".info/serverTimeOffset"), (v) => (serverOffset = v.val() || 0));
+
+/* ---------- preferences ---------- */
+let prefs = { sound: true, alerts: true };
+try { prefs = { ...prefs, ...JSON.parse(localStorage.getItem("teaPrefs") || "{}") }; } catch {}
+const savePrefs = () => localStorage.setItem("teaPrefs", JSON.stringify(prefs));
 
 /* ---------- helpers ---------- */
 // Firebase promises NEVER fail when it can't reach the database - they just hang.
@@ -116,43 +129,70 @@ function toast(msg) {
   toastTimer = setTimeout(() => $("toast").classList.remove("show"), 3000);
 }
 let pip = null; // floating always-on-top window (Document Picture-in-Picture)
-function chime() {
+
+/* sounds (Web Audio, no files needed) */
+let actx;
+function audio() {
   try {
-    const c = chime.c || (chime.c = new AudioContext());
-    [660, 880].forEach((f, i) => {
-      const t = c.currentTime + i * 0.13,
-        o = c.createOscillator(),
-        g = c.createGain();
-      o.frequency.value = f;
-      g.gain.setValueAtTime(0.001, t);
-      g.gain.exponentialRampToValueAtTime(0.1, t + 0.03);
-      g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
-      o.connect(g).connect(c.destination);
-      o.start(t);
-      o.stop(t + 0.4);
-    });
+    actx ||= new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === "suspended") actx.resume();
+    return actx;
+  } catch { return null; }
+}
+["pointerdown", "keydown"].forEach((ev) => document.addEventListener(ev, audio, { passive: true }));
+function tone(f, t, dur, vol) {
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.frequency.value = f;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(actx.destination);
+  o.start(t);
+  o.stop(t + dur + 0.05);
+}
+function playSound(kind = "chime") {
+  if (!prefs.sound) return;
+  const c = audio();
+  if (!c) return;
+  const t = c.currentTime + 0.03;
+  if (kind === "bell")
+    [0, 0.55].forEach((d) =>
+      [[880, 0.16, 1.4], [2429, 0.07, 0.9], [4752, 0.04, 0.5], [7860, 0.02, 0.3]].forEach(([f, v, dur]) => tone(f, t + d, dur, v)));
+  else if (kind === "ready")
+    [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) => tone(f, t + i * 0.11, 0.7, 0.12));
+  else [660, 880].forEach((f, i) => tone(f, t + i * 0.13, 0.4, 0.1));
+}
+
+/* browser notifications */
+const ICON = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">☕</text></svg>');
+const notifState = () =>
+  !("Notification" in window) || !window.isSecureContext ? "unsupported" : Notification.permission;
+async function showOS(body, tag) {
+  if (notifState() !== "granted" || !prefs.alerts) return;
+  const opts = { body, tag, icon: ICON, badge: ICON, renotify: !!tag, vibrate: [150, 80, 150] };
+  try {
+    const n = new Notification("Tea Break Together ☕", opts);
+    n.onclick = () => { window.focus(); n.close(); };
   } catch {}
 }
-function notify(msg) {
+function notify(msg, o = {}) {
   toast(msg);
-  chime();
-  if (
-    !pip &&
-    "Notification" in window &&
-    Notification.permission === "granted" &&
-    document.hidden
-  ) {
-    const n = new Notification("Tea Break Together ☕", { body: msg });
-    n.onclick = () => {
-      window.focus();
-      n.close();
-    };
-  }
-   const w = $("miniWidget");
+  playSound(o.sound || "chime");
+  if (!pip && document.hidden) showOS(msg, o.tag);
+  const w = $("miniWidget");
   if (w) {
     w.classList.add("alert");
     setTimeout(() => w.classList.remove("alert"), 4000);
   }
+}
+
+/* keep the tab alive while it's in the background */
+function keepAlive() {
+  if (kept) return;
+  kept = true;
+  try { navigator.locks?.request("tea-keepalive", () => new Promise(() => {})); } catch {}
+  // Chrome may auto-open the floating window when you switch tabs (best-effort)
+  try { navigator.mediaSession?.setActionHandler("enterpictureinpicture", () => openPip()); } catch {}
 }
 
 function burst(n = 26) {
@@ -169,8 +209,33 @@ function burst(n = 26) {
   }
 }
 
+/* ---------- room lifetime: auto-delete after 2 idle days, except the permanent room ---------- */
+const PERM_ROOM = "3N"; // never deleted; first person to join becomes its admin
+const STALE_MS = 2 * 24 * 3600 * 1000;
+let lastTouch = 0;
+function touch(force = false) {
+  if (!roomCode) return;
+  const t = now();
+  if (!force && t - lastTouch < 300000) return; // at most every 5 min
+  lastTouch = t;
+  update(ref(db), { [`rooms/${roomCode}/info/lastActive`]: t, [`roomIndex/${roomCode}`]: t }).catch(() => {});
+}
+setInterval(() => touch(), 600000); // being in the room counts as activity
+async function sweepStale() {
+  try {
+    const idx = (await T(get(ref(db, "roomIndex")), 8000)).val() || {};
+    for (const [code, last] of Object.entries(idx))
+      if (code !== PERM_ROOM && now() - last > STALE_MS)
+        await update(ref(db), { [`rooms/${code}`]: null, [`roomIndex/${code}`]: null });
+  } catch {}
+}
+
 /* ---------- room enter / create ---------- */
-async function enterRoom(code, create) {
+const adminIds = () => { try { return JSON.parse(localStorage.getItem("teaAdminIds") || "{}"); } catch { return {}; } };
+const isAdmin = () => !!info && (info.createdBy === userId || !!info.admins?.[userId]);
+const isOwner = (id = userId) => !!info && info.createdBy === id;
+
+async function enterRoom(code, create, auto = false) {
   userName = $("nameInput").value.trim();
   roomCode = cleanCode(code);
   if (!userName || !roomCode) {
@@ -180,42 +245,71 @@ async function enterRoom(code, create) {
   }
   $("setupError").textContent = "Connecting… ☕";
   $("createBtn").disabled = $("joinBtn").disabled = true;
+  info = null;
   try {
-    const exists = (await T(get(R("info")))).exists();
+    const snap = await T(get(R("info")));
+    let exists = snap.exists(), inf = snap.val() || {};
+    const perm = roomCode === PERM_ROOM;
+    if (exists && !perm && inf.lastActive && now() - inf.lastActive > STALE_MS) {
+      await T(update(ref(db), { [`rooms/${roomCode}`]: null, [`roomIndex/${roomCode}`]: null }));
+      exists = false; inf = {}; // expired -> behaves like it never existed
+    }
+    if (perm) create = !exists; // first one into 3N creates it and becomes admin
     if (create && exists)
-      throw new Error(
-        "That room code is already taken — pick another, or press Join room 💗",
-      );
-    if (!create && !exists)
-      throw new Error("Room not found 🥺 Check the code or create it.");
+      throw new Error("That room code is already taken — pick another, or press Join room 💗");
+    if (!create && !exists) throw new Error("Room not found 🥺 Check the code or create it.");
+    // get my admin identity back if I come back on this device
+    const saved = adminIds()[roomCode];
+    if (exists && saved && (inf.createdBy === saved || inf.admins?.[saved])) {
+      userId = saved;
+      sessionStorage.setItem("teaUserId", userId);
+    }
+    if (exists) {
+      if ((await T(get(R(`banned/${userId}`)))).exists())
+        throw new Error("An admin removed you from this room 🚫");
+      const member = (await T(get(R(`people/${userId}`)))).exists();
+      const adm = inf.createdBy === userId || inf.admins?.[userId];
+      if (inf.locked && !member && !adm)
+        throw new Error("This room is locked 🔒 Ask the admin to unlock it.");
+      // names must be unique inside a room
+      const all = (await T(get(R("people")))).val() || {};
+      const clash = Object.entries(all).find(
+        ([u, p]) => u !== userId && p?.name && p.name.toLowerCase() === userName.toLowerCase());
+      if (clash) {
+        const keeper = clash[1].online !== false || inf.createdBy === clash[0] || inf.admins?.[clash[0]];
+        if (keeper) throw new Error(`The name "${userName}" is already taken in this room — pick another 💗`);
+        await T(remove(R(`people/${clash[0]}`))); // an old offline entry frees its name
+      }
+    }
     if (create)
-      await T(
-        set(R("info"), {
-          createdAt: serverTimestamp(),
-          name: roomCode,
-          createdBy: userId,
-        }),
-      );
-    await T(
-      set(R(`people/${userId}`), {
-        name: userName,
-        emoji: myEmoji,
-        online: true,
-        joinedAt: serverTimestamp(),
-      }),
-    );
+      await T(set(R("info"), {
+        createdAt: serverTimestamp(),
+        name: roomCode,
+        createdBy: userId,
+        admins: { [userId]: true },
+        locked: false,
+        permanent: perm,
+        lastActive: now(),
+      }));
+    await T(set(R(`people/${userId}`), {
+      name: userName, emoji: myEmoji, online: true, joinedAt: serverTimestamp(),
+    }));
     onDisconnect(R(`people/${userId}`)).update({ online: false });
     $("setupError").textContent = "";
     $("setup").hidden = true;
     $("roomView").hidden = false;
     document.body.classList.add("in-room");
-    $("roomTitle").textContent = `Room ${roomCode}`;
-    $("roomSub").textContent = "Share this code with your friends: " + roomCode;
+    localStorage.setItem("teaSession", JSON.stringify({ name: userName, room: roomCode }));
+    localStorage.setItem("teaName", userName);
     startListening();
-    sendMsg(`${userName} joined the room 🌸`, true);
-    toast("You're in the break club! 🌷");
+    touch(true);
+    if (!auto) sendMsg(`${userName} joined the room 🌸`, true);
+    toast(create ? "Room created — you're the admin 👑" : "You're in the break club! 🌷");
+    keepAlive();
+    if (notifState() === "default") setTimeout(() => toast("Tip: tap 🔔 to turn on notifications"), 3500);
   } catch (e) {
     roomCode = "";
+    if (auto) localStorage.removeItem("teaSession");
     showError(e);
   } finally {
     $("createBtn").disabled = $("joinBtn").disabled = false;
@@ -223,76 +317,155 @@ async function enterRoom(code, create) {
 }
 
 function startListening() {
-  stops.forEach((s) => s());
+  stops.forEach((x) => x());
   stops = [];
   primed = false;
   seen.clear();
-  stops.push(
-    onValue(
-      R("people"),
-      (s) => {
-        people = s.val() || {};
-        renderPeople();
-        renderRequests();
-      },
-      showError,
-    ),
-  );
-  stops.push(
-    onValue(
-      R("requests"),
-     (s) => {
-  requests = s.val() || {};
-  renderRequests();                                  // draw first
-  try { detectNew(); } catch (err) { console.error(err); }  // then notify
-  primed = true;
-},
-      showError,
-    ),
-  );
-  stops.push(
-    onValue(R("messages"), (s) => renderChat(s.val() || {}), showError),
-  );
+  stops.push(onValue(R("info"), (v) => {
+    const was = info;
+    info = v.val();
+    if (!info) { if (was) forceLeave("This room was deleted by the owner 🗑"); return; }
+    if (isAdmin()) {
+      const a = adminIds(); a[roomCode] = userId;
+      localStorage.setItem("teaAdminIds", JSON.stringify(a));
+    }
+    renderRoomHeader(); renderAdmin(); renderPeople(); renderRequests();
+  }, showError));
+  stops.push(onValue(R(`banned/${userId}`), (v) => v.exists() && forceLeave("An admin removed you from this room 🚫")));
+  stops.push(onValue(R("banned"), (v) => { banned = v.val() || {}; renderAdmin(); }));
+  stops.push(onValue(R("people"), (v) => { people = v.val() || {}; renderPeople(); renderRequests(); }, showError));
+  stops.push(onValue(R("requests"), (v) => {
+    requests = v.val() || {};
+    renderRequests();
+    try { detectNew(); } catch (err) { console.error(err); }
+    primed = true;
+  }, showError));
+  stops.push(onValue(R("messages"), (v) => renderChat(v.val() || {}), showError));
+}
+
+function renderRoomHeader() {
+  const nm = info?.name && info.name !== roomCode ? `${info.name} · ${roomCode}` : `Room ${roomCode}`;
+  $("roomTitle").textContent = nm;
+  $("roomSub").textContent =
+    (info?.locked ? "🔒 Locked — no new people can join. " : "Share this code with your friends: " + roomCode + ". ") +
+    (roomCode === PERM_ROOM ? "♾ Permanent room. " : "") +
+    (isOwner() ? "You're the owner 👑" : isAdmin() ? "You're an admin ⭐" : "");
+}
+
+function teardown() {
+  stops.forEach((x) => x());
+  stops = [];
+  roomCode = "";
+  people = {}; requests = {}; info = null; banned = {};
+  $("roomView").hidden = true;
+  $("setup").hidden = false;
+  $("adminPanel").hidden = true;
+  document.body.classList.remove("in-room");
+  localStorage.removeItem("teaSession");
+}
+function forceLeave(msg) {
+  try { onDisconnect(R(`people/${userId}`)).cancel(); } catch {}
+  teardown();
+  $("setupError").textContent = msg;
+  toast(msg);
+}
+
+/* ---------- admin controls ---------- */
+function renderAdmin() {
+  const p = $("adminPanel");
+  p.hidden = !(roomCode && isAdmin());
+  if (p.hidden) return;
+  const bl = Object.entries(banned);
+  $("adminBody").innerHTML = `
+    <div class="admin-grid">
+      <button class="secondary small" data-admin="lock">${info.locked ? "🔓 Unlock room" : "🔒 Lock room (no new joins)"}</button>
+      <button class="secondary small" data-admin="rename">✏️ Rename room</button>
+      <button class="secondary small" data-admin="clearchat">🧹 Clear chat</button>
+      <button class="secondary small" data-admin="clearreq">🗑 Clear requests</button>
+      ${isOwner() && roomCode !== PERM_ROOM ? '<button class="decline" data-admin="delete">💥 Delete room</button>' : ""}
+    </div>
+    <p class="hint" style="margin:10px 8px 0">👑 owner · ⭐ admin. Use ⭐ / 🚫 next to a person to make them admin or remove them.</p>
+    <h4>Removed people</h4>
+    ${bl.length ? bl.map(([u, b]) => `<div class="banned"><span>${esc(b.name)}</span><button class="secondary small" data-admin="unban" data-uid="${esc(u)}">Allow back</button></div>`).join("") : '<p class="hint" style="margin:0 8px">Nobody removed.</p>'}`;
+}
+
+async function adminClick(e) {
+  const b = e.target.closest("[data-admin]");
+  if (!b || !roomCode || !isAdmin()) return;
+  const { admin: a, uid } = b.dataset;
+  try {
+    if (a === "kick") {
+      const p = people[uid];
+      if (!p || uid === userId || isOwner(uid)) return;
+      if (info.admins?.[uid] && !isOwner()) return toast("Only the owner can remove another admin 💗");
+      if (!confirm(`Remove ${p.name} from the room?`)) return;
+      await T(update(ref(db, `rooms/${roomCode}`), {
+        [`people/${uid}`]: null,
+        [`info/admins/${uid}`]: null,
+        [`banned/${uid}`]: { name: p.name, at: now(), by: userId },
+      }));
+      sendMsg(`${p.name} was removed by an admin 🚫`, true);
+    } else if (a === "promote") {
+      await T(set(R(`info/admins/${uid}`), true));
+      sendMsg(`${people[uid]?.name || "Someone"} is now an admin ⭐`, true);
+    } else if (a === "demote") {
+      if (isOwner()) await T(remove(R(`info/admins/${uid}`)));
+    } else if (a === "lock") await T(update(R("info"), { locked: !info.locked }));
+    else if (a === "rename") {
+      const n = prompt("New room name", info.name || roomCode);
+      if (n?.trim()) await T(update(R("info"), { name: n.trim().slice(0, 24) }));
+    } else if (a === "clearchat") {
+      if (confirm("Clear the whole chat?")) await T(remove(R("messages")));
+    } else if (a === "clearreq") {
+      if (confirm("Remove all break requests?")) await T(remove(R("requests")));
+    } else if (a === "unban") await T(remove(R(`banned/${uid}`)));
+    else if (a === "delete") {
+      if (isOwner() && roomCode !== PERM_ROOM && confirm("Delete this room for everyone? This can't be undone."))
+        await T(remove(ref(db, `rooms/${roomCode}`)));
+    }
+  } catch (err) { toast(err.message); }
 }
 
 /* ---------- people ---------- */
 function renderPeople() {
-  const now = Date.now();
+  const t = now(), adm = isAdmin();
   $("peopleList").innerHTML =
     Object.entries(people)
+      .filter(([, p]) => p && p.name)
       .map(([id, p]) => {
         const waiting = Object.values(requests).some(
-          (r) =>
-            r.responses?.[id]?.status === "wait" &&
-            r.responses[id].waitUntil > now,
-        );
-        const state =
-          p.online === false
-            ? "Away 💤"
-            : waiting
-              ? "Waiting ⏰"
-              : "Available ✨";
-        return `<div class="person ${p.online === false ? "away" : ""}"><span class="avatar">${esc(p.emoji || "🌸")}</span><div><div class="person-name">${esc(p.name)}${id === userId ? " (you)" : ""}</div><div class="person-state">${state}</div></div></div>`;
+          (r) => r.responses?.[id]?.status === "wait" && r.responses[id].waitUntil > t);
+        const state = p.online === false ? "Away 💤" : waiting ? "Waiting ⏰" : "Available ✨";
+        const isAd = !!info?.admins?.[id];
+        const badge = isOwner(id) ? " 👑" : isAd ? " ⭐" : "";
+        const canManage = adm && id !== userId && !isOwner(id) && (!isAd || isOwner());
+        const role = isAd
+          ? isOwner() ? `<button data-admin="demote" data-uid="${esc(id)}" title="Remove admin rights">⭐✕</button>` : ""
+          : `<button data-admin="promote" data-uid="${esc(id)}" title="Make admin">⭐</button>`;
+        const tools = canManage
+          ? `<span class="person-tools">${role}<button data-admin="kick" data-uid="${esc(id)}" title="Remove from room">🚫</button></span>` : "";
+        return `<div class="person ${p.online === false ? "away" : ""}"><span class="avatar">${esc(p.emoji || "🌸")}</span><div><div class="person-name">${esc(p.name)}${esc(badge)}${id === userId ? " (you)" : ""}</div><div class="person-state">${state}</div></div>${tools}</div>`;
       })
-      .join("") ||
-    '<p class="empty">Invite a friend using this room code 🌸</p>';
+      .join("") || '<p class="empty">Invite a friend using this room code 🌸</p>';
 }
 
 /* ---------- requests ---------- */
 const isOpen = (r) =>
   r.status !== "closed" &&
   r.status !== "started" &&
-  Date.now() - (r.createdAt || 0) < 7200000;
+  now() - (r.createdAt || 0) < 7200000;
+// a finished wait counts as "ready" on every device (no need for the waiter's tab to write it)
+const effSt = (x) => (x.status === "wait" && x.waitUntil <= now() ? "ready" : x.status);
 const respOf = (r, st) =>
   Object.entries(r.responses || {}).filter(
-    ([u, x]) => u !== r.from && st.includes(x.status),
+    ([u, x]) => u !== r.from && st.includes(effSt(x)),
   );
 
 function renderRequests() {
   const list = Object.entries(requests)
     .filter(
       ([, r]) =>
-        r.status !== "closed" && Date.now() - (r.createdAt || 0) < 7200000,
+        r.status !== "closed" && now() - (r.createdAt || 0) < 7200000,
     )
     .sort((a, b) => (b[1].createdAt || 0) - (a[1].createdAt || 0))
     .slice(0, 8);
@@ -306,7 +479,7 @@ function renderRequests() {
             no = respOf(r, ["no"]);
           const mins = Math.max(
             0,
-            Math.round((Date.now() - r.createdAt) / 60000),
+            Math.round((now() - r.createdAt) / 60000),
           );
           const my = r.responses?.[userId]?.status;
           const banner = yes.length
@@ -333,7 +506,7 @@ function renderRequests() {
           else if (mine)
             actions = `<div class="request-actions">${yes.length ? `<button class="primary" data-act="start" data-id="${id}">We're going! 🚶‍♀️</button>` : ""}<button class="secondary" data-act="close" data-id="${id}">Cancel request</button></div>`;
           else
-            actions = `<div class="request-actions"><button class="agree" data-act="yes" data-id="${id}">I'm in ☕${my === "yes" ? " ✓" : ""}</button>${[2, 5, 10, 15].map((m) => `<button class="wait" data-act="wait" data-min="${m}" data-id="${id}">⏰ ${m}m</button>`).join("")}<button class="wait" data-act="wait" data-min="custom" data-id="${id}">⏰ …</button><button class="decline" data-act="no" data-id="${id}">Can't now 💗${my === "no" ? " ✓" : ""}</button></div>`;
+            actions = `<div class="request-actions"><button class="agree" data-act="yes" data-id="${id}">I'm in ☕${my === "yes" ? " ✓" : ""}</button>${[2, 5, 10, 15].map((m) => `<button class="wait" data-act="wait" data-min="${m}" data-id="${id}">⏰ ${m}m</button>`).join("")}<button class="wait" data-act="wait" data-min="custom" data-id="${id}">⏰ …</button><button class="decline" data-act="no" data-id="${id}">Can't now 💗${my === "no" ? " ✓" : ""}</button>${isAdmin() ? `<button class="secondary" data-act="close" data-id="${id}" title="Admin: remove this request">🗑</button>` : ""}</div>`;
           return `<article class="request-card ${mine ? "mine" : ""}"><div class="request-head"><span class="request-who">${esc(r.name)}${mine ? " (you)" : ""} wants a break</span><span class="request-meta">${mins} min ago · ${yes.length} in · ${waits.length} waiting</span></div><div class="request-reason">${esc(r.reason)}</div>${banner}${waitLines}${readyLines}${noLine}${actions}</article>`;
         })
         .join("")
@@ -362,16 +535,18 @@ function renderMini() {
   } else if (mineOpen) {
     const [id, r] = mineOpen,
       yes = respOf(r, ["yes", "ready"]);
-    st.textContent = yes.length
-      ? `🎉 ${yes.map(([, x]) => x.name).join(", ")} ready for tea!`
-      : "Waiting for friends… 💌";
+    const ws = respOf(r, ["wait"]);
+    if (yes.length) st.textContent = `🎉 ${yes.map(([, x]) => x.name).join(", ")} ready for tea!`;
+    else if (ws.length)
+      st.innerHTML = `⏰ ${esc(ws[0][1].name)} ready in <span class="cd" data-until="${ws[0][1].waitUntil}"></span>`;
+    else st.textContent = "Waiting for friends… 💌";
     if (yes.length)
       box.innerHTML = `<button class="primary" data-act="start" data-id="${id}">We're going! 🚶‍♀️</button>`;
   } else if (answered) {
     const [, r] = answered,
       x = r.responses[userId];
     st.innerHTML =
-      x.status === "wait"
+      effSt(x) === "wait"
         ? `⏰ Ready for ${esc(r.name)} in <span class="cd" data-until="${x.waitUntil}"></span>`
         : x.status === "no"
           ? "No worries 💗"
@@ -391,12 +566,13 @@ async function askBreak(e) {
         from: userId,
         name: userName,
         reason,
-        createdAt: Date.now(),
+        createdAt: now(),
         status: "open",
       }),
     );
     $("customReason").value = "";
     toast("Break request sent to everyone! 💌");
+    touch();
   } catch (e) {
     toast(e.message);
   }
@@ -406,16 +582,17 @@ async function respond(id, status, min) {
   const data = {
     status,
     name: userName,
-    updatedAt: Date.now(),
+    updatedAt: now(),
     waitUntil: null,
     waitMinutes: null,
   };
   if (status === "wait") {
     data.waitMinutes = min;
-    data.waitUntil = Date.now() + min * 60000;
+    data.waitUntil = now() + min * 60000;
   }
   try {
     await T(update(R(`requests/${id}/responses/${userId}`), data));
+    touch();
     toast(
       status === "yes"
         ? "Yay, you're in! ☕"
@@ -458,7 +635,7 @@ function detectNew() {
     if (!seen.has(k)) {
       seen.add(k);
       if (primed && r.from !== userId && isOpen(r))
-        notify(`${r.name} wants a break: ${r.reason}`);
+        notify(`${r.name} wants a break: ${r.reason}`, { tag: id });
     }
     for (const [u, x] of Object.entries(r.responses || {})) {
       const rk = `${id}:${u}:${x.status}:${x.updatedAt}`;
@@ -483,41 +660,65 @@ function detectNew() {
   }
 }
 
-/* ---------- countdowns + auto "ready" after waiting ---------- */
+/* ---------- countdowns, 5-second bell, ready alert ---------- */
+// Everyone uses now() = server time, so both devices ring at the same moment.
 function tick() {
-  const now = Date.now();
+  const t = now();
   [document, pip?.document]
     .filter(Boolean)
     .flatMap((d) => [...d.querySelectorAll(".cd")])
     .forEach((el) => {
-      const s = Math.max(0, Math.round((el.dataset.until - now) / 1000));
-      el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+      const ms = el.dataset.until - t;
+      const sec = Math.max(0, Math.ceil(ms / 1000));
+      const txt = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+      if (el.textContent !== txt) el.textContent = txt;
+      el.classList.toggle("soon", ms <= 5000);
     });
+  if (!roomCode) return;
+  let redraw = false;
   for (const [id, r] of Object.entries(requests)) {
-    const x = r.responses?.[userId];
-    const key = `${id}:${x?.updatedAt}`;
-    if (
-      x?.status === "wait" &&
-      x.waitUntil <= now &&
-      !autoReady.has(key) &&
-      isOpen(r)
-    ) {
-      autoReady.add(key);
-      respond(id, "ready");
+    if (!isOpen(r)) continue;
+    for (const [u, x] of Object.entries(r.responses || {})) {
+      if (x.status !== "wait" || !x.waitUntil) continue;
+      if (u !== userId && r.from !== userId) continue; // only the two people involved
+      const left = x.waitUntil - t, me = u === userId;
+      const kPre = `pre:${id}:${u}:${x.waitUntil}`, kEnd = `end:${id}:${u}:${x.waitUntil}`;
+      if (left <= 5000 && !fired.has(kPre)) {
+        fired.add(kPre);
+        if (left > 0)
+          notify(me ? `⏰ 5 seconds! Get ready for ${r.name} ☕` : `⏰ ${x.name} is ready in 5 seconds!`,
+            { sound: "bell", tag: kPre });
+      }
+      if (left <= 0 && !fired.has(kEnd)) {
+        fired.add(kEnd);
+        redraw = true;
+        if (left > -15000) {
+          notify(me ? `🎉 Break time! Go to ${r.name} ☕💗` : `🎉 ${x.name} is ready now! Tea break time ☕`,
+            { sound: "ready", tag: kEnd });
+          try { burst(); } catch {}
+        }
+      }
     }
   }
+  if (redraw) { renderPeople(); renderRequests(); }
 }
-setInterval(() => roomCode && tick(), 1000);
+// a Worker timer isn't slowed down in background tabs
+let tickWorker;
+try {
+  tickWorker = new Worker(URL.createObjectURL(new Blob(["setInterval(()=>postMessage(1),250)"], { type: "text/javascript" })));
+  tickWorker.onmessage = tick;
+} catch { setInterval(tick, 250); }
 
 /* ---------- chat ---------- */
 function sendMsg(text, system = false) {
   if (!roomCode || !text) return;
+  touch();
   push(R("messages"), {
     from: userId,
     name: userName,
     text,
     system,
-    createdAt: Date.now(),
+    createdAt: now(),
   }).catch(console.error);
 }
 function renderChat(msgs) {
@@ -539,15 +740,9 @@ function renderChat(msgs) {
 async function leave() {
   if (!roomCode) return;
   sendMsg(`${userName} left 👋`, true);
-  await update(R(`people/${userId}`), { online: false }).catch(() => {});
-  stops.forEach((s) => s());
-  stops = [];
-  roomCode = "";
-  people = {};
-  requests = {};
-  $("roomView").hidden = true;
-  $("setup").hidden = false;
-  document.body.classList.remove("in-room");
+  try { onDisconnect(R(`people/${userId}`)).cancel(); } catch {}
+  await remove(R(`people/${userId}`)).catch(() => {});
+  teardown();
 }
 
 /* ---------- wiring ---------- */
@@ -596,16 +791,59 @@ $("reacts").addEventListener(
   "click",
   (e) => e.target.tagName === "BUTTON" && sendMsg(e.target.textContent),
 );
-$("notifBtn").addEventListener("click", async () => {
-  if (!("Notification" in window))
-    return toast("This browser doesn't support notifications");
-  const p = await Notification.requestPermission();
-  toast(
-    p === "granted"
-      ? "Browser notifications on 🔔 (while this tab is open)"
-      : "Notifications blocked 🥺",
-  );
+/* ---------- notification settings ---------- */
+function updateBell() {
+  const st = notifState(), b = $("notifBtn"), on = st === "granted" && prefs.alerts;
+  b.textContent = st === "denied" || st === "unsupported" ? "⛔" : on ? "🔔" : "🔕";
+  b.classList.toggle("blocked", st === "denied" || st === "unsupported");
+  b.classList.toggle("on", on);
+  b.title = { granted: on ? "Notifications on — click for settings" : "Pop-ups muted — click for settings",
+    denied: "Notifications are blocked — click to see how to fix", default: "Turn on notifications",
+    unsupported: "Notifications not available — click for details" }[st];
+}
+function renderNotif() {
+  const st = notifState();
+  const pill = { granted: ["✅ On", "ok"], denied: ["⛔ Blocked in your browser", "bad"],
+    default: ["🔕 Not turned on yet", "warn"], unsupported: ["🚫 Not available here", "bad"] }[st];
+  $("ndStatus").className = "nd-status " + pill[1];
+  $("ndStatus").textContent = pill[0];
+  $("ndText").textContent = {
+    granted: "You'll get pop-ups when a friend asks for a break and you're on another tab. Sounds and the 5-second bell follow the switches below.",
+    default: "Allow notifications to get pinged when a friend asks for a break while you're on another tab.",
+    denied: "Browsers only ask once, so pressing the bell again can't change it. Fix it in site settings:",
+    unsupported: window.isSecureContext
+      ? "This browser has no web notifications. (iPhone: Share → Add to Home Screen, then open it from the home screen.)"
+      : "Notifications need a secure page. Open the app with Live Server (http://127.0.0.1…) or https://, not a file:// link.",
+  }[st];
+  $("ndSteps").hidden = st !== "denied";
+  const btn = (k, l) => `<button class="primary" data-nd="${k}">${l}</button>`;
+  $("ndActions").innerHTML = st === "default" ? btn("allow", "Turn on notifications 🔔")
+    : st === "granted" ? btn("test", "Send a test 🔔")
+    : st === "denied" ? btn("recheck", "I've allowed it — check again ✅") : "";
+  $("ndSound").checked = prefs.sound;
+  $("ndAlerts").checked = prefs.alerts;
+}
+$("notifBtn").addEventListener("click", () => { renderNotif(); $("notifDialog").showModal(); });
+$("ndClose").addEventListener("click", () => $("notifDialog").close());
+$("notifDialog").addEventListener("click", (e) => e.target === $("notifDialog") && $("notifDialog").close());
+$("notifDialog").addEventListener("click", async (e) => {
+  const k = e.target.closest("[data-nd]")?.dataset.nd;
+  if (!k) return;
+  if (k === "allow") { await Notification.requestPermission(); }
+  else if (k === "test") { showOS("It works! You'll be pinged here 💗", "test"); playSound("bell"); }
+  else if (k === "recheck" && notifState() === "denied") toast("Still blocked — change it in the site settings, then try again 💗");
+  updateBell(); renderNotif();
 });
+$("ndSound").addEventListener("change", (e) => { prefs.sound = e.target.checked; savePrefs(); });
+$("ndAlerts").addEventListener("change", (e) => { prefs.alerts = e.target.checked; savePrefs(); updateBell(); });
+try {
+  navigator.permissions?.query({ name: "notifications" }).then((p) => {
+    p.onchange = () => { updateBell(); renderNotif(); }; // updates live when you change it in site settings
+  });
+} catch {}
+$("peopleList").addEventListener("click", adminClick);
+$("adminBody").addEventListener("click", adminClick);
+updateBell();
 if ($("miniReason")) $("miniReason").innerHTML = REASONS.map(
   ([e, l]) => `<option value="${esc(l)} ${e}">${e} ${esc(l)}</option>`,
 ).join("");
@@ -622,14 +860,15 @@ async function openPip() {
   try {
     const w = $("miniWidget");
     pip = await documentPictureInPicture.requestWindow({
-      width: 320,
-      height: 250,
+      width: 340,
+      height: 300,
     });
     const l = pip.document.createElement("link");
     l.rel = "stylesheet";
     l.href = new URL("style.css", location.href).href;
     pip.document.head.append(l);
     pip.document.body.className = "pip-body";
+    ["pointerdown", "keydown"].forEach((ev) => pip.document.addEventListener(ev, audio, { passive: true }));
     pip.document.documentElement.style.overflow = "hidden";
     w.classList.add("pip");
     w.hidden = false;
@@ -695,3 +934,15 @@ document.addEventListener("pointerdown", (e) => {
   b.appendChild(w);
   setTimeout(() => w.remove(), 600);
 });
+
+/* ---------- startup: remember me + auto re-join after reload ---------- */
+sweepStale();
+try {
+  $("nameInput").value = localStorage.getItem("teaName") || "";
+  const sess = JSON.parse(localStorage.getItem("teaSession") || "null");
+  if (sess?.name && sess?.room) {
+    $("nameInput").value = sess.name;
+    $("roomInput").value = sess.room;
+    enterRoom(sess.room, false, true);
+  }
+} catch {}

@@ -20,20 +20,48 @@ body {
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
   padding: 10px;
 }
-body::before {
+/* Background: whole picture always visible (contain), blurred copy fills the leftover space */
+:root {
+  --bg-img: url("bg-desktop.jpg");
+}
+@media (orientation: portrait) {
+  :root {
+    --bg-img: url("bg-mobile.jpg");
+  }
+}
+body::before,
+body::after {
   content: "";
   position: fixed;
   inset: 0;
   z-index: -1;
+  pointer-events: none;
+}
+body::before {
   background:
     linear-gradient(
       rgba(255, 247, 251, var(--veil, 0.25)),
       rgba(255, 247, 251, var(--veil, 0.25))
     ),
-    url("bg-desktop.jpg") center 35% / cover no-repeat,
+    var(--bg-img) center / cover no-repeat,
     #ffe4f0;
+  filter: blur(26px) saturate(1.1);
+  transform: scale(1.12);
+}
+body::after {
+  background:
+    linear-gradient(
+      rgba(255, 247, 251, var(--veil, 0.25)),
+      rgba(255, 247, 251, var(--veil, 0.25))
+    ),
+    var(--bg-img) center / contain no-repeat;
+}
+.pip-body::before,
+.pip-body::after {
+  display: none;
 }
 body.in-room {
   --veil: 0.6;
@@ -965,15 +993,6 @@ footer {
   body {
     padding: 14px;
   }
-  body::before {
-    background:
-      linear-gradient(
-        rgba(255, 247, 251, var(--veil, 0.25)),
-        rgba(255, 247, 251, var(--veil, 0.25))
-      ),
-      url("bg-mobile.jpg") center top/cover no-repeat,
-      #ffe4f0;
-  }
   .panel {
     padding: 7px;
     border-radius: 20px;
@@ -1009,4 +1028,148 @@ footer {
   .bg {
     display: none;
   }
+}
+
+/* ---- timer: last 5 seconds ---- */
+.cd.soon {
+  background: #ffd9e4;
+  color: #c43e6f;
+  animation: tickp 0.5s infinite;
+}
+
+/* ---- bell button states ---- */
+.icon-btn.on {
+  border-color: #ed83b5;
+  background: #ffeef7;
+}
+.icon-btn.blocked {
+  border-color: #e9a3a3;
+  background: #fff0f0;
+}
+
+/* ---- notification dialog ---- */
+.notif-dialog {
+  width: min(420px, calc(100vw - 28px));
+  border: 2px solid var(--line);
+  border-radius: 24px;
+  padding: 18px;
+  background: #fff8fc;
+  color: #56364a;
+  box-shadow: 0 20px 50px #9d4f7a40;
+}
+.notif-dialog::backdrop {
+  background: #56364a66;
+  backdrop-filter: blur(3px);
+}
+.nd-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.nd-head h3 {
+  margin: 0;
+}
+.nd-status {
+  display: inline-block;
+  margin: 12px 0 8px;
+  padding: 6px 12px;
+  border-radius: 99px;
+  font-weight: 800;
+  font-size: 13px;
+}
+.nd-status.ok {
+  background: #e9fff3;
+  color: #2f8f64;
+}
+.nd-status.warn {
+  background: #fff3d6;
+  color: #a16b23;
+}
+.nd-status.bad {
+  background: #ffe6ec;
+  color: #c43e6f;
+}
+.nd-text,
+.nd-push {
+  font-size: 14px;
+  line-height: 1.45;
+  color: #79566c;
+}
+.nd-steps {
+  margin: 8px 0;
+  padding-left: 20px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #79566c;
+}
+.nd-push {
+  margin-top: 12px;
+  font-size: 13px;
+}
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-weight: 700;
+  font-size: 14px;
+}
+.toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: #e5659f;
+}
+
+/* ---- admin ---- */
+.admin-panel summary {
+  cursor: pointer;
+  font-weight: 800;
+  color: #a84679;
+  padding: 6px 8px;
+}
+.admin-panel[open] summary {
+  margin-bottom: 8px;
+}
+.admin-panel h4 {
+  margin: 14px 8px 6px;
+  font-size: 13px;
+  color: #9d6484;
+}
+.admin-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 8px;
+}
+.admin-grid button,
+.banned button {
+  border: 0;
+  font-weight: 800;
+  border-radius: 12px;
+}
+.admin-grid .decline {
+  padding: 8px 14px;
+}
+.banned {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 0 8px 6px;
+  padding: 6px 10px;
+  background: #fff5fa;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-weight: 700;
+}
+.person-tools {
+  display: flex;
+  gap: 4px;
+  margin-left: 4px;
+}
+.person-tools button {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 9px;
+  padding: 3px 7px;
+  font-size: 13px;
 }
