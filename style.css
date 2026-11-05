@@ -38,6 +38,7 @@ body::before {
   position: fixed;
   inset: 0;
   background: var(--bg-img) center / cover no-repeat;
+      filter: blur(2px);
   z-index: -1;
   pointer-events: none;
 }
@@ -129,13 +130,14 @@ h3 {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+  
 }
 .brand {
   display: flex;
   gap: 12px;
   align-items: center;
-  background: #fbfbfb97;
   border-radius: 22px;
+  background: rgba(70, 35, 55, 0.742);
 }
 .brand-icon {
   display: inline-block;
@@ -205,6 +207,7 @@ h3 {
   margin: 5px auto;
   text-align: center;
   animation: pop 0.5s both;
+  background: rgba(70, 35, 55, 0.742);
 }
 .mascot {
   display: block;
