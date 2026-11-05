@@ -25,40 +25,23 @@ body {
 }
 /* Background: whole picture always visible (contain), blurred copy fills the leftover space */
 :root {
-  --bg-img: url("bg-desktop.jpg");
+  --bg-img: url("bg-desktop.png");
 }
 @media (orientation: portrait) {
   :root {
     --bg-img: url("bg-mobile.jpg");
   }
 }
-body::before,
-body::after {
+
+body::before {
   content: "";
   position: fixed;
   inset: 0;
+  background: var(--bg-img) center / cover no-repeat;
   z-index: -1;
   pointer-events: none;
 }
-body::before {
-  background:
-    linear-gradient(
-      rgba(255, 247, 251, var(--veil, 0.25)),
-      rgba(255, 247, 251, var(--veil, 0.25))
-    ),
-    var(--bg-img) center / cover no-repeat,
-    #ffe4f0;
-  filter: blur(26px) saturate(1.1);
-  transform: scale(1.12);
-}
-body::after {
-  background:
-    linear-gradient(
-      rgba(255, 247, 251, var(--veil, 0.25)),
-      rgba(255, 247, 251, var(--veil, 0.25))
-    ),
-    var(--bg-img) center / contain no-repeat;
-}
+
 .pip-body::before,
 .pip-body::after {
   display: none;
